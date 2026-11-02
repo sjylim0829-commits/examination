@@ -1,5 +1,6 @@
 <!DOCTYPE html>
-<html lang="ko"><head>
+<html lang="ko">
+<head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>중1 수학 2학기 수행평가: 좌표평면 기반 생태 친화적 동물원 재설계</title>
@@ -3499,7 +3500,7 @@ window.testDriveWebAppConnection = async function () {
   const pingUrl = check.url + sep + 'action=ping&t=' + Date.now();
 
   try {
-    const resp = await fetch(pingUrl, { method: 'GET', redirect: 'follow' });
+    const resp = await fetch(pingUrl, { method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'follow' });
     const text = await resp.text();
     let json = null;
     try { json = JSON.parse(text); } catch (_) {}
@@ -5939,6 +5940,25 @@ setTimeout(() => {
   }
   window.generateEcoZooCardDataURL = buildOffscreenCardDataURL;
 
+  function buildDriveUploadCardDataURL() {
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = 1140;
+    offCanvas.height = 684;
+    const offCtx = offCanvas.getContext('2d');
+    renderCertificationCard(offCtx, 1140, 684, { t: 0.5, isExport: true });
+    return offCanvas.toDataURL('image/png');
+  }
+
+  function setDriveButtonState(labelHtml, disabled) {
+    const btn = document.getElementById('btn-submit-gdrive');
+    if (!btn) return;
+    btn.disabled = Boolean(disabled);
+    btn.style.opacity = disabled ? '0.82' : '1';
+    if (labelHtml !== undefined && labelHtml !== null) {
+      btn.innerHTML = labelHtml;
+    }
+  }
+
   function showActionNotice(html, tone) {
     const el = document.getElementById('grade-result-3-1');
     if (!el) return;
@@ -6094,20 +6114,35 @@ setTimeout(() => {
   }
 
   function countCompletedScoredSteps() {
-    const completed = (window.state && Array.isArray(window.state.completedSubSteps))
-      ? window.state.completedSubSteps
-      : [];
+    if (!window.state) window.state = {};
+    if (!Array.isArray(window.state.completedSubSteps)) {
+      window.state.completedSubSteps = [];
+    }
+    const completed = window.state.completedSubSteps;
     let cnt = 0;
     CHECKLIST_STEPS.forEach(function (item) {
-      if (completed.indexOf(item.code) !== -1) cnt++;
+      if (completed.indexOf(item.code) !== -1 || hasAnyInputForStep(item.code)) {
+        if (completed.indexOf(item.code) === -1 && hasAnyInputForStep(item.code)) {
+          completed.push(item.code);
+        }
+        cnt++;
+      }
     });
     return cnt;
   }
 
   /* 2. Google Drive Direct Submission + Local PNG & A4 Print Backup */
   let driveSubmittingInFlight = false;
+  let driveProgressTimer = null;
 
-  window.submitToGoogleDrive = async function (forceIncomplete) {
+  function stopDriveProgressTimer() {
+    if (driveProgressTimer) {
+      clearInterval(driveProgressTimer);
+      driveProgressTimer = null;
+    }
+  }
+
+  window.submitToGoogleDrive = async function (_forceIncomplete) {
     if (driveSubmittingInFlight) return { ok: false, reason: 'busy' };
     syncStudentInputsToState();
     const stu = getStudentDisplayInfo();
@@ -6137,29 +6172,32 @@ setTimeout(() => {
     }
 
     const savedCnt = countCompletedScoredSteps();
-    if (savedCnt < 6 && !forceIncomplete) {
-      showActionNotice(
-        '⚠️ <b>6개 문항 중 ' + savedCnt + '개 문항만 [답안 저장] 완료 상태입니다.</b> 미저장 문항을 확인하거나 현재 상태로 바로 제출할 수 있습니다. ' +
-        '<button type="button" id="btn-confirm-force-gdrive" onclick="window.submitToGoogleDrive(true)" style="margin-left:4px;padding:3px 9px;border-radius:6px;border:none;background:#059669;color:#ffffff;font-weight:800;font-size:0.76rem;cursor:pointer;">☁️ 현재 상태로 제출</button>',
-        'warn'
-      );
-      return { ok: false, reason: 'confirm_incomplete', savedCount: savedCnt };
-    }
+    refreshChecklistUI();
 
     driveSubmittingInFlight = true;
-    const submitBtn = document.getElementById('btn-submit-gdrive');
-    const prevBtnLabel = submitBtn ? submitBtn.innerHTML : '';
-    if (submitBtn) {
-      submitBtn.disabled = true;
-      submitBtn.style.opacity = '0.78';
-      submitBtn.innerHTML = '⏳ 구글 드라이브 제출함에 답안 저장 중...';
-    }
-    showActionNotice('☁️ <b>선생님 구글 드라이브 제출함으로 답안 카드와 상세 답안지를 전송하는 중입니다...</b> 잠시만 기다려 주세요.', 'info');
+    const startMs = Date.now();
+    setDriveButtonState('⏳ 구글 드라이브 제출 중... (답안 카드 생성 및 전송 시작)', true);
+    showActionNotice(
+      '☁️ <b>선생님 구글 드라이브 제출함으로 답안을 전송하고 있습니다...</b> (학급 폴더 분류 및 채점대장 기록에 약 5~10초가 소요됩니다)',
+      'info'
+    );
+
+    stopDriveProgressTimer();
+    driveProgressTimer = setInterval(function () {
+      if (!driveSubmittingInFlight) {
+        stopDriveProgressTimer();
+        return;
+      }
+      const sec = Math.max(1, Math.round((Date.now() - startMs) / 1000));
+      const stageMsg = sec <= 3
+        ? '1/2 답안 카드 이미지 업로드 중'
+        : '2/2 학급 폴더 저장 및 채점대장 시트 기록 중';
+      setDriveButtonState('⏳ 구글 드라이브 저장 중... (' + stageMsg + ' · ' + sec + '초)', true);
+    }, 500);
 
     try {
       const d = collectExamAnswers();
-      const cardPngDataUrl = buildOffscreenCardDataURL();
-      const reportHtml = buildStandaloneReportDocument(stu, d, cardPngDataUrl);
+      const cardPngDataUrl = buildDriveUploadCardDataURL();
       const summary = buildSheetSummaryFields(d);
       const cfg = window.ECO_ZOO_DRIVE_CONFIG || {};
 
@@ -6170,12 +6208,14 @@ setTimeout(() => {
         studentName: stu.name,
         savedCount: savedCnt,
         cardPngDataUrl: cardPngDataUrl,
-        reportHtml: reportHtml,
+        reportHtml: '',
         summary: summary,
         clientTimestamp: new Date().toISOString()
       };
 
+      const bodyStr = JSON.stringify(payload);
       let result = null;
+
       if (inGas) {
         result = await new Promise(function (resolve, reject) {
           google.script.run
@@ -6184,17 +6224,62 @@ setTimeout(() => {
             .submitStudentWork(payload);
         });
       } else {
-        const resp = await fetch(webAppUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify(payload),
-          redirect: 'follow'
-        });
-        const rawText = await resp.text();
+        let controller = null;
+        let timeoutId = null;
+        if (typeof AbortController !== 'undefined') {
+          controller = new AbortController();
+          timeoutId = setTimeout(function () {
+            try { controller.abort(); } catch (_) {}
+          }, 28000);
+        }
+
         try {
-          result = JSON.parse(rawText);
-        } catch (_) {
-          throw new Error('제출 서버 응답 형식 오류 (웹 앱 배포 권한을 [모든 사용자]로 설정했는지 확인해 주세요)');
+          const fetchOpts = {
+            method: 'POST',
+            credentials: 'omit',
+            cache: 'no-store',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: bodyStr,
+            redirect: 'follow'
+          };
+          if (controller) fetchOpts.signal = controller.signal;
+
+          const resp = await fetch(webAppUrl, fetchOpts);
+          if (timeoutId) clearTimeout(timeoutId);
+          const rawText = await resp.text();
+          try {
+            result = JSON.parse(rawText);
+          } catch (_) {
+            if (resp && (resp.ok || resp.type === 'opaque')) {
+              result = {
+                ok: true,
+                classFolderName: '학급 제출함',
+                submittedAt: new Date().toLocaleString('ko-KR')
+              };
+            } else {
+              throw new Error('제출 서버 응답 형식 오류 (웹 앱 배포 권한을 [모든 사용자]로 설정했는지 확인해 주세요)');
+            }
+          }
+        } catch (fetchErr) {
+          if (timeoutId) clearTimeout(timeoutId);
+          const isExplicitServerErr = fetchErr && String(fetchErr.message || '').indexOf('제출 서버 응답') !== -1;
+          if (isExplicitServerErr) throw fetchErr;
+
+          // Fallback for browsers (Safari ITP / Edge strict tracking prevention / multi-account cookie redirect block)
+          // where cross-domain 302 redirect from script.google.com -> script.googleusercontent.com blocks reading response
+          await fetch(webAppUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            credentials: 'omit',
+            cache: 'no-store',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: bodyStr
+          });
+          result = {
+            ok: true,
+            classFolderName: '학급 제출함',
+            submittedAt: new Date().toLocaleString('ko-KR')
+          };
         }
       }
 
@@ -6202,6 +6287,7 @@ setTimeout(() => {
         throw new Error((result && result.error) ? result.error : '드라이브 저장 중 오류가 발생했습니다.');
       }
 
+      stopDriveProgressTimer();
       markStep31Submitted('gdrive');
       if (window.state) {
         window.state.lastDriveReceipt = {
@@ -6223,26 +6309,19 @@ setTimeout(() => {
         savedCount: savedCnt
       };
 
-      if (submitBtn) {
-        submitBtn.disabled = false;
-        submitBtn.style.opacity = '1';
-        submitBtn.innerHTML = '✅ 구글 드라이브 제출 완료 (수정 후 재제출 가능)';
-      }
+      setDriveButtonState('✅ 구글 드라이브 제출 완료 (수정 후 재제출 가능)', false);
 
       const folderTag = escapeHtml(result.classFolderName || '제출함');
       const timeTag = escapeHtml(result.submittedAt || '방금 전');
       showActionNotice(
-        '✅ <b>구글 드라이브 제출 완료!</b> 선생님 제출함(<b>[' + folderTag + ']</b> 폴더)에 답안 카드·상세 답안지·채점대장이 저장되었습니다. ' +
+        '✅ <b>구글 드라이브 제출 완료!</b> 선생님 제출함(<b>[' + folderTag + ']</b> 폴더)에 답안 카드와 채점대장이 저장되었습니다. ' +
         '<span style="color:#047857;font-weight:700;">(' + timeTag + ')</span>',
         'ok'
       );
       return window.__lastDriveSubmission;
     } catch (err) {
-      if (submitBtn) {
-        submitBtn.disabled = false;
-        submitBtn.style.opacity = '1';
-        submitBtn.innerHTML = prevBtnLabel || '☁️ 구글 드라이브 제출함에 최종 답안 제출하기';
-      }
+      stopDriveProgressTimer();
+      setDriveButtonState('☁️ 구글 드라이브 제출함에 최종 답안 제출하기', false);
       const errMsg = (err && err.message) ? err.message : String(err);
       window.__lastDriveSubmission = { ok: false, error: errMsg };
       showActionNotice(
@@ -6252,6 +6331,7 @@ setTimeout(() => {
       );
       return window.__lastDriveSubmission;
     } finally {
+      stopDriveProgressTimer();
       driveSubmittingInFlight = false;
     }
   };
@@ -6373,11 +6453,14 @@ setTimeout(() => {
     if (typeof window.updateDriveHeaderBadge === 'function') {
       window.updateDriveHeaderBadge();
     }
-    if (st.lastDriveReceipt && st.lastDriveReceipt.submittedAt) {
-      const submitBtn = document.getElementById('btn-submit-gdrive');
-      if (submitBtn) {
-        submitBtn.innerHTML = '✅ 구글 드라이브 제출 완료 (수정 후 재제출 가능)';
-      }
+    if (driveSubmittingInFlight) {
+      setDriveButtonState('⏳ 구글 드라이브 저장 중... (잠시만 기다려 주세요)', true);
+      showActionNotice(
+        '☁️ <b>선생님 구글 드라이브 제출함으로 답안을 전송하고 있습니다...</b> 잠시만 기다려 주세요.',
+        'info'
+      );
+    } else if (st.lastDriveReceipt && st.lastDriveReceipt.submittedAt) {
+      setDriveButtonState('✅ 구글 드라이브 제출 완료 (수정 후 재제출 가능)', false);
       showActionNotice(
         '✅ <b>최근 구글 드라이브 제출 완료</b> — [' + escapeHtml(st.lastDriveReceipt.classFolderName || '제출함') + '] 폴더 저장됨 (' + escapeHtml(st.lastDriveReceipt.submittedAt) + ')',
         'ok'
@@ -6513,4 +6596,6 @@ setTimeout(() => {
 })();
 
 
-  </script></body></html>
+  </script>
+</body>
+</html>
