@@ -3293,7 +3293,7 @@ window.loadLocalDraft = function (studentId, studentName) {
   }
 };
 
-const ACCESS_PW_KEY_BYTES = [40, 20, 3, 113, 103, 85];
+const ACCESS_PW_KEY_BYTES = [40, 23, 0, 116, 103, 85];
 
 function verifyAccessPassword(rawPw) {
   const s = String(rawPw === undefined || rawPw === null ? '' : rawPw).trim();
